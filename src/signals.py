@@ -547,31 +547,276 @@ def signal_geographic_implausibility(con: duckdb.DuckDBPyConnection) -> list[dic
     return signals
 
 
+def signal_address_clustering(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Signal 7: Address Clustering.
+
+    Multiple unrelated NPIs registered at the same zip code with
+    unusually high combined billing. Flags zip codes where 10+ NPIs
+    share the same zip and combined billing exceeds $5M — potential
+    ghost office or mill operation.
+    """
+    results = con.execute("""
+        WITH provider_totals AS (
+            SELECT
+                billing_npi AS npi,
+                SUM(total_paid) AS total_paid,
+                SUM(total_claims) AS total_claims
+            FROM spending
+            GROUP BY billing_npi
+        ),
+        zip_clusters AS (
+            SELECT
+                n.zip_code,
+                n.state,
+                COUNT(DISTINCT n.npi) AS npi_count,
+                LIST(DISTINCT n.npi) AS npi_list,
+                LIST(DISTINCT COALESCE(n.org_name, n.first_name || ' ' || n.last_name)) AS provider_names,
+                SUM(pt.total_paid) AS combined_paid,
+                SUM(pt.total_claims) AS combined_claims
+            FROM nppes n
+            JOIN provider_totals pt ON n.npi = pt.npi
+            WHERE n.zip_code IS NOT NULL
+              AND TRIM(n.zip_code) != ''
+            GROUP BY n.zip_code, n.state
+            HAVING COUNT(DISTINCT n.npi) >= 10
+               AND SUM(pt.total_paid) > 5000000
+        )
+        SELECT * FROM zip_clusters
+        ORDER BY combined_paid DESC
+    """).fetchall()
+
+    columns = ["zip_code", "state", "npi_count", "npi_list", "provider_names",
+               "combined_paid", "combined_claims"]
+
+    signals = []
+    for row in results:
+        d = dict(zip(columns, row))
+        npi_list = d["npi_list"] if isinstance(d["npi_list"], list) else []
+        severity = "high" if int(d["npi_count"] or 0) >= 20 else "medium"
+        signals.append({
+            "signal_type": "address_clustering",
+            "severity": severity,
+            "npi": npi_list[0] if npi_list else "UNKNOWN",
+            "evidence": {
+                "zip_code": d["zip_code"],
+                "state": d["state"],
+                "npi_count": int(d["npi_count"] or 0),
+                "clustered_npis": npi_list[:20],
+                "provider_names": (d["provider_names"] if isinstance(d["provider_names"], list) else [])[:20],
+                "combined_total_paid": round(float(d["combined_paid"] or 0), 2),
+                "combined_total_claims": int(d["combined_claims"] or 0),
+            },
+            "estimated_overpayment_usd": 0.0,
+        })
+    return signals
+
+
+def signal_upcoding(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Signal 8: Upcoding Detection.
+
+    Provider consistently bills highest-level E&M codes (99215, 99205)
+    at rates far exceeding their peers in the same taxonomy+state.
+    A provider billing >80% high-complexity codes when peers average <30%
+    is likely upcoding.
+    """
+    results = con.execute("""
+        WITH provider_em AS (
+            SELECT
+                s.billing_npi AS npi,
+                SUM(s.total_claims) AS total_em_claims,
+                SUM(CASE WHEN s.hcpcs_code IN ('99215','99205','99223','99233','99245','99255')
+                    THEN s.total_claims ELSE 0 END) AS high_level_claims,
+                SUM(s.total_paid) AS total_paid
+            FROM spending s
+            WHERE s.hcpcs_code IN (
+                '99201','99202','99203','99204','99205',
+                '99211','99212','99213','99214','99215',
+                '99221','99222','99223',
+                '99231','99232','99233',
+                '99241','99242','99243','99244','99245',
+                '99251','99252','99253','99254','99255'
+            )
+            GROUP BY s.billing_npi
+            HAVING SUM(s.total_claims) >= 50
+        ),
+        with_nppes AS (
+            SELECT
+                pe.*,
+                n.taxonomy_code,
+                n.state,
+                COALESCE(n.org_name, n.first_name || ' ' || n.last_name) AS provider_name,
+                pe.high_level_claims * 100.0 / NULLIF(pe.total_em_claims, 0) AS high_pct
+            FROM provider_em pe
+            JOIN nppes n ON pe.npi = n.npi
+        ),
+        peer_avg AS (
+            SELECT
+                taxonomy_code,
+                state,
+                AVG(high_pct) AS avg_high_pct,
+                COUNT(*) AS peer_count
+            FROM with_nppes
+            WHERE taxonomy_code IS NOT NULL AND state IS NOT NULL
+            GROUP BY taxonomy_code, state
+            HAVING COUNT(*) >= 3
+        )
+        SELECT
+            wn.npi,
+            wn.provider_name,
+            wn.taxonomy_code,
+            wn.state,
+            wn.total_em_claims,
+            wn.high_level_claims,
+            wn.total_paid,
+            wn.high_pct,
+            pa.avg_high_pct AS peer_avg_high_pct,
+            pa.peer_count
+        FROM with_nppes wn
+        JOIN peer_avg pa ON wn.taxonomy_code = pa.taxonomy_code AND wn.state = pa.state
+        WHERE wn.high_pct > 80.0
+          AND pa.avg_high_pct < 30.0
+        ORDER BY wn.high_pct DESC
+    """).fetchall()
+
+    columns = ["npi", "provider_name", "taxonomy_code", "state", "total_em_claims",
+               "high_level_claims", "total_paid", "high_pct", "peer_avg_high_pct", "peer_count"]
+
+    signals = []
+    for row in results:
+        d = dict(zip(columns, row))
+        high_pct = float(d["high_pct"] or 0)
+        peer_avg = float(d["peer_avg_high_pct"] or 0)
+        excess_pct = max(0, high_pct - peer_avg) / 100.0
+        overpayment = float(d["total_paid"] or 0) * excess_pct * 0.3  # conservative 30% uplift
+
+        signals.append({
+            "signal_type": "upcoding",
+            "severity": "high" if high_pct > 90 else "medium",
+            "npi": d["npi"],
+            "evidence": {
+                "total_em_claims": int(d["total_em_claims"] or 0),
+                "high_level_claims": int(d["high_level_claims"] or 0),
+                "high_level_percentage": round(high_pct, 2),
+                "peer_avg_high_level_percentage": round(peer_avg, 2),
+                "total_paid": round(float(d["total_paid"] or 0), 2),
+                "peer_count": int(d["peer_count"] or 0),
+            },
+            "estimated_overpayment_usd": round(overpayment, 2),
+        })
+    return signals
+
+
+def signal_concurrent_billing(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Signal 9: Concurrent Billing Across States.
+
+    A single NPI billing in 5+ states in the same month — physically
+    impossible for an individual practitioner. Potential identity theft
+    or phantom billing.
+    """
+    results = con.execute("""
+        WITH npi_state_months AS (
+            SELECT
+                s.billing_npi AS npi,
+                s.claim_month,
+                COUNT(DISTINCT n_serv.state) AS state_count,
+                LIST(DISTINCT n_serv.state) AS states,
+                SUM(s.total_paid) AS month_paid,
+                SUM(s.total_claims) AS month_claims
+            FROM spending s
+            LEFT JOIN nppes n_serv ON s.servicing_npi = n_serv.npi
+            WHERE n_serv.state IS NOT NULL
+            GROUP BY s.billing_npi, s.claim_month
+            HAVING COUNT(DISTINCT n_serv.state) >= 5
+        ),
+        flagged AS (
+            SELECT
+                npi,
+                MAX(state_count) AS max_states_in_month,
+                COUNT(*) AS months_flagged,
+                SUM(month_paid) AS total_paid_flagged,
+                SUM(month_claims) AS total_claims_flagged
+            FROM npi_state_months
+            GROUP BY npi
+        )
+        SELECT
+            f.npi,
+            COALESCE(n.org_name, n.first_name || ' ' || n.last_name) AS provider_name,
+            n.entity_type_code,
+            n.taxonomy_code,
+            n.state AS home_state,
+            f.max_states_in_month,
+            f.months_flagged,
+            f.total_paid_flagged,
+            f.total_claims_flagged
+        FROM flagged f
+        LEFT JOIN nppes n ON f.npi = n.npi
+        ORDER BY f.max_states_in_month DESC
+    """).fetchall()
+
+    columns = ["npi", "provider_name", "entity_type_code", "taxonomy_code", "home_state",
+               "max_states_in_month", "months_flagged", "total_paid_flagged", "total_claims_flagged"]
+
+    signals = []
+    for row in results:
+        d = dict(zip(columns, row))
+        entity = d["entity_type_code"]
+        # Only flag individuals — orgs legitimately operate multi-state
+        if entity == '2':
+            continue
+        severity = "high" if int(d["max_states_in_month"] or 0) >= 8 else "medium"
+        signals.append({
+            "signal_type": "concurrent_billing",
+            "severity": severity,
+            "npi": d["npi"],
+            "evidence": {
+                "home_state": d["home_state"],
+                "max_states_in_single_month": int(d["max_states_in_month"] or 0),
+                "months_flagged": int(d["months_flagged"] or 0),
+                "total_paid_in_flagged_months": round(float(d["total_paid_flagged"] or 0), 2),
+                "total_claims_in_flagged_months": int(d["total_claims_flagged"] or 0),
+            },
+            "estimated_overpayment_usd": 0.0,
+        })
+    return signals
+
+
 def run_all_signals(con: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:
-    """Run all 6 signals and return results grouped by type."""
-    print("\n[1/6] Signal: Excluded Provider Still Billing...")
+    """Run all 9 signals and return results grouped by type."""
+    print("\n[1/9] Signal: Excluded Provider Still Billing...")
     excluded = signal_excluded_provider(con)
     print(f"  Found {len(excluded)} flags")
 
-    print("[2/6] Signal: Billing Volume Outlier...")
+    print("[2/9] Signal: Billing Volume Outlier...")
     outlier = signal_billing_outlier(con)
     print(f"  Found {len(outlier)} flags")
 
-    print("[3/6] Signal: Rapid Billing Escalation...")
+    print("[3/9] Signal: Rapid Billing Escalation...")
     escalation = signal_rapid_escalation(con)
     print(f"  Found {len(escalation)} flags")
 
-    print("[4/6] Signal: Workforce Impossibility...")
+    print("[4/9] Signal: Workforce Impossibility...")
     workforce = signal_workforce_impossibility(con)
     print(f"  Found {len(workforce)} flags")
 
-    print("[5/6] Signal: Shared Authorized Official...")
+    print("[5/9] Signal: Shared Authorized Official...")
     official = signal_shared_official(con)
     print(f"  Found {len(official)} flags")
 
-    print("[6/6] Signal: Geographic Implausibility...")
+    print("[6/9] Signal: Geographic Implausibility...")
     geo = signal_geographic_implausibility(con)
     print(f"  Found {len(geo)} flags")
+
+    print("[7/9] Signal: Address Clustering...")
+    clustering = signal_address_clustering(con)
+    print(f"  Found {len(clustering)} flags")
+
+    print("[8/9] Signal: Upcoding Detection...")
+    upcoding = signal_upcoding(con)
+    print(f"  Found {len(upcoding)} flags")
+
+    print("[9/9] Signal: Concurrent Billing Across States...")
+    concurrent = signal_concurrent_billing(con)
+    print(f"  Found {len(concurrent)} flags")
 
     return {
         "excluded_provider": excluded,
@@ -580,4 +825,7 @@ def run_all_signals(con: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:
         "workforce_impossibility": workforce,
         "shared_official": official,
         "geographic_implausibility": geo,
+        "address_clustering": clustering,
+        "upcoding": upcoding,
+        "concurrent_billing": concurrent,
     }

@@ -56,7 +56,30 @@ def con():
 
             -- Geographic implausibility: home health, many claims, few beneficiaries
             ('7777777777', '7777777777', 'G0151', '2023-06-01'::DATE, 2, 500, 50000.0),
-            ('7777777777', '7777777777', 'T1019', '2023-06-01'::DATE, 3, 200, 20000.0)
+            ('7777777777', '7777777777', 'T1019', '2023-06-01'::DATE, 3, 200, 20000.0),
+
+            -- Address clustering: 10+ NPIs in same zip with high billing
+            ('8800000001', '8800000001', '99213', '2023-01-01'::DATE, 20, 100, 600000.0),
+            ('8800000002', '8800000002', '99213', '2023-01-01'::DATE, 18, 90, 550000.0),
+            ('8800000003', '8800000003', '99213', '2023-01-01'::DATE, 15, 80, 520000.0),
+            ('8800000004', '8800000004', '99213', '2023-01-01'::DATE, 12, 70, 510000.0),
+            ('8800000005', '8800000005', '99213', '2023-01-01'::DATE, 10, 60, 500000.0),
+            ('8800000006', '8800000006', '99213', '2023-01-01'::DATE, 10, 55, 490000.0),
+            ('8800000007', '8800000007', '99213', '2023-01-01'::DATE, 10, 50, 480000.0),
+            ('8800000008', '8800000008', '99213', '2023-01-01'::DATE, 10, 45, 470000.0),
+            ('8800000009', '8800000009', '99213', '2023-01-01'::DATE, 10, 40, 460000.0),
+            ('8800000010', '8800000010', '99213', '2023-01-01'::DATE, 10, 35, 450000.0),
+
+            -- Upcoding provider: bills almost all high-level E&M codes
+            ('9900000001', '9900000001', '99215', '2023-01-01'::DATE, 30, 90, 90000.0),
+            ('9900000001', '9900000001', '99205', '2023-02-01'::DATE, 20, 60, 60000.0),
+            ('9900000001', '9900000001', '99213', '2023-03-01'::DATE, 10, 10, 5000.0),
+            -- Normal E&M peers (same taxonomy+state TX, 208D00000X)
+            ('9900000002', '9900000002', '99213', '2023-01-01'::DATE, 30, 80, 40000.0),
+            ('9900000002', '9900000002', '99215', '2023-02-01'::DATE, 5, 10, 10000.0),
+            ('9900000003', '9900000003', '99213', '2023-01-01'::DATE, 25, 70, 35000.0),
+            ('9900000003', '9900000003', '99215', '2023-02-01'::DATE, 3, 5, 5000.0),
+            ('9900000004', '9900000004', '99213', '2023-01-01'::DATE, 20, 60, 30000.0)
 
         ) AS t(billing_npi, servicing_npi, hcpcs_code, claim_month, unique_beneficiaries, total_claims, total_paid)
     """)
@@ -98,7 +121,23 @@ def con():
             ('6666666663', '2', 'Shell Corp 3', NULL, NULL, 'NJ', '07003', '261QM1200X', '2019-01-01'::DATE, 'SMITH', 'ROBERT'),
             ('6666666664', '2', 'Shell Corp 4', NULL, NULL, 'NJ', '07004', '261QM1200X', '2019-06-01'::DATE, 'SMITH', 'ROBERT'),
             ('6666666665', '2', 'Shell Corp 5', NULL, NULL, 'NJ', '07005', '261QM1200X', '2020-01-01'::DATE, 'SMITH', 'ROBERT'),
-            ('7777777777', '2', 'Home Health LLC', NULL, NULL, 'PA', '19101', '251E00000X', '2016-01-01'::DATE, NULL, NULL)
+            ('7777777777', '2', 'Home Health LLC', NULL, NULL, 'PA', '19101', '251E00000X', '2016-01-01'::DATE, NULL, NULL),
+            -- Address clustering: 10 providers at same zip 11111
+            ('8800000001', '2', 'Cluster Corp 1', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-01-01'::DATE, NULL, NULL),
+            ('8800000002', '2', 'Cluster Corp 2', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-02-01'::DATE, NULL, NULL),
+            ('8800000003', '2', 'Cluster Corp 3', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-03-01'::DATE, NULL, NULL),
+            ('8800000004', '2', 'Cluster Corp 4', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-04-01'::DATE, NULL, NULL),
+            ('8800000005', '2', 'Cluster Corp 5', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-05-01'::DATE, NULL, NULL),
+            ('8800000006', '2', 'Cluster Corp 6', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-06-01'::DATE, NULL, NULL),
+            ('8800000007', '2', 'Cluster Corp 7', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-07-01'::DATE, NULL, NULL),
+            ('8800000008', '2', 'Cluster Corp 8', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-08-01'::DATE, NULL, NULL),
+            ('8800000009', '2', 'Cluster Corp 9', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-09-01'::DATE, NULL, NULL),
+            ('8800000010', '2', 'Cluster Corp 10', NULL, NULL, 'NY', '11111', '207Q00000X', '2017-10-01'::DATE, NULL, NULL),
+            -- Upcoding provider + peers (taxonomy 208D00000X, state TX)
+            ('9900000001', '1', NULL, 'Upcoder', 'Max', 'TX', '77001', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9900000002', '1', NULL, 'Normal6', 'Doc', 'TX', '77002', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9900000003', '1', NULL, 'Normal7', 'Doc', 'TX', '77003', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9900000004', '1', NULL, 'Normal8', 'Doc', 'TX', '77004', '208D00000X', '2015-01-01'::DATE, NULL, NULL)
         ) AS t(npi, entity_type_code, org_name, last_name, first_name, state, zip_code, taxonomy_code, enumeration_date, auth_official_last, auth_official_first)
     """)
 

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.ingest import load_all
 from src.signals import run_all_signals
-from src.output import generate_report, write_report
+from src.output import generate_report, write_report, write_html_report
 
 
 def main():
@@ -28,6 +28,11 @@ def main():
         help="Output JSON file path (default: fraud_signals.json)",
     )
     parser.add_argument(
+        "--html",
+        default=None,
+        help="Output HTML report path (optional)",
+    )
+    parser.add_argument(
         "--memory-limit",
         default="2GB",
         help="DuckDB memory limit (default: 2GB)",
@@ -43,7 +48,7 @@ def main():
 
     # Load data
     print("=" * 60)
-    print("Medicaid Fraud Signal Detection Engine v1.0.0")
+    print("Medicaid Fraud Signal Detection Engine v2.0.0")
     print("=" * 60)
 
     con = load_all(args.data_dir, args.memory_limit)
@@ -62,8 +67,12 @@ def main():
     print("\nGenerating report...")
     report = generate_report(signal_results, con, total_providers)
 
-    # Write output
+    # Write JSON output
     write_report(report, args.output)
+
+    # Write HTML output if requested
+    if args.html:
+        write_html_report(report, args.html)
 
     elapsed = time.time() - start_time
     minutes = int(elapsed // 60)
