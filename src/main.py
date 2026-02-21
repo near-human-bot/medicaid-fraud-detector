@@ -48,7 +48,7 @@ def main():
 
     # Load data
     print("=" * 60)
-    print("Medicaid Fraud Signal Detection Engine v2.0.0")
+    print("Medicaid Fraud Signal Detection Engine v3.0.0")
     print("=" * 60)
 
     con = load_all(args.data_dir, args.memory_limit)

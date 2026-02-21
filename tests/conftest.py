@@ -79,7 +79,23 @@ def con():
             ('9900000002', '9900000002', '99215', '2023-02-01'::DATE, 5, 10, 10000.0),
             ('9900000003', '9900000003', '99213', '2023-01-01'::DATE, 25, 70, 35000.0),
             ('9900000003', '9900000003', '99215', '2023-02-01'::DATE, 3, 5, 5000.0),
-            ('9900000004', '9900000004', '99213', '2023-01-01'::DATE, 20, 60, 30000.0)
+            ('9900000004', '9900000004', '99213', '2023-01-01'::DATE, 20, 60, 30000.0),
+
+            -- Concurrent billing provider: individual billing across 6 different servicing NPIs in different states
+            ('9800000001', '9810000001', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+            ('9800000001', '9810000002', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+            ('9800000001', '9810000003', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+            ('9800000001', '9810000004', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+            ('9800000001', '9810000005', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+            ('9800000001', '9810000006', '99213', '2023-06-01'::DATE, 10, 50, 5000.0),
+
+            -- Multi-signal provider: hits both outlier and rapid escalation
+            ('9700000001', '9700000001', '99213', '2023-01-01'::DATE, 5, 20, 800.0),
+            ('9700000001', '9700000001', '99213', '2023-02-01'::DATE, 10, 50, 2000.0),
+            ('9700000001', '9700000001', '99213', '2023-03-01'::DATE, 30, 200, 20000.0),
+            ('9700000001', '9700000001', '99213', '2023-04-01'::DATE, 60, 500, 80000.0),
+            ('9700000001', '9700000001', '99213', '2023-05-01'::DATE, 100, 900, 200000.0),
+            ('9700000001', '9700000001', '99213', '2023-06-01'::DATE, 200, 2000, 500000.0)
 
         ) AS t(billing_npi, servicing_npi, hcpcs_code, claim_month, unique_beneficiaries, total_claims, total_paid)
     """)
@@ -137,7 +153,17 @@ def con():
             ('9900000001', '1', NULL, 'Upcoder', 'Max', 'TX', '77001', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
             ('9900000002', '1', NULL, 'Normal6', 'Doc', 'TX', '77002', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
             ('9900000003', '1', NULL, 'Normal7', 'Doc', 'TX', '77003', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
-            ('9900000004', '1', NULL, 'Normal8', 'Doc', 'TX', '77004', '208D00000X', '2015-01-01'::DATE, NULL, NULL)
+            ('9900000004', '1', NULL, 'Normal8', 'Doc', 'TX', '77004', '208D00000X', '2015-01-01'::DATE, NULL, NULL),
+            -- Concurrent billing: individual provider + 6 servicing NPIs in different states
+            ('9800000001', '1', NULL, 'Multi', 'State', 'NY', '10001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000001', '1', NULL, 'Serv1', 'Doc', 'NY', '10001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000002', '1', NULL, 'Serv2', 'Doc', 'CA', '90001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000003', '1', NULL, 'Serv3', 'Doc', 'TX', '75001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000004', '1', NULL, 'Serv4', 'Doc', 'FL', '33001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000005', '1', NULL, 'Serv5', 'Doc', 'IL', '60001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            ('9810000006', '1', NULL, 'Serv6', 'Doc', 'PA', '19001', '207Q00000X', '2015-01-01'::DATE, NULL, NULL),
+            -- Multi-signal provider (rapidly escalating + potentially outlier)
+            ('9700000001', '1', NULL, 'Multi', 'Signal', 'CA', '90210', '207Q00000X', '2022-11-01'::DATE, NULL, NULL)
         ) AS t(npi, entity_type_code, org_name, last_name, first_name, state, zip_code, taxonomy_code, enumeration_date, auth_official_last, auth_official_first)
     """)
 

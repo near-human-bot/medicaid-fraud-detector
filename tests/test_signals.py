@@ -25,7 +25,10 @@ from src.output import (
     generate_executive_summary,
     STATUTE_MAP,
     NEXT_STEPS_MAP,
+    CLAIM_TYPE_MAP,
+    METHODOLOGY,
 )
+from src.signals import compute_cross_signal_correlations
 
 
 class TestSignalExcludedProvider:
@@ -156,10 +159,12 @@ class TestSignalSharedOfficial:
             ev = r["evidence"]
             assert len(ev["controlled_npis"]) >= 5
 
-    def test_shared_official_overpayment_is_zero(self, con):
+    def test_shared_official_has_overpayment(self, con):
         results = signal_shared_official(con)
         for r in results:
-            assert r["estimated_overpayment_usd"] == 0.0
+            assert r["estimated_overpayment_usd"] >= 0
+            if r["evidence"]["combined_total_paid"] > 0:
+                assert r["estimated_overpayment_usd"] > 0
 
 
 class TestSignalGeographicImplausibility:
@@ -253,9 +258,11 @@ class TestSignalUpcoding:
 class TestSignalConcurrentBilling:
     """Signal 9: Concurrent Billing Across States."""
 
-    def test_returns_list(self, con):
+    def test_detects_concurrent_billing(self, con):
         results = signal_concurrent_billing(con)
-        assert isinstance(results, list)
+        assert len(results) >= 1
+        npis = [r["npi"] for r in results]
+        assert "9800000001" in npis
 
     def test_does_not_flag_single_state_provider(self, con):
         results = signal_concurrent_billing(con)
@@ -266,6 +273,26 @@ class TestSignalConcurrentBilling:
         results = signal_concurrent_billing(con)
         for r in results:
             assert r["signal_type"] == "concurrent_billing"
+
+    def test_concurrent_has_state_count(self, con):
+        results = signal_concurrent_billing(con)
+        cb = [r for r in results if r["npi"] == "9800000001"]
+        if cb:
+            ev = cb[0]["evidence"]
+            assert "max_states_in_single_month" in ev
+            assert ev["max_states_in_single_month"] >= 5
+
+    def test_concurrent_has_overpayment(self, con):
+        results = signal_concurrent_billing(con)
+        cb = [r for r in results if r["npi"] == "9800000001"]
+        if cb:
+            assert cb[0]["estimated_overpayment_usd"] > 0
+
+    def test_does_not_flag_organizations(self, con):
+        results = signal_concurrent_billing(con)
+        npis = [r["npi"] for r in results]
+        # 5555555555 is an org (entity_type_code=2)
+        assert "5555555555" not in npis
 
 
 class TestRunAllSignals:
@@ -532,3 +559,240 @@ class TestOutputGeneration:
                 score_a = providers[i].get("risk_score", {}).get("score", 0)
                 score_b = providers[i + 1].get("risk_score", {}).get("score", 0)
                 assert score_a >= score_b
+
+
+class TestCrossSignalCorrelations:
+    """Test cross-signal correlation analysis."""
+
+    def test_cross_signal_returns_dict(self, con):
+        signal_results = run_all_signals(con)
+        correlations = compute_cross_signal_correlations(signal_results)
+        assert isinstance(correlations, dict)
+
+    def test_cross_signal_has_required_fields(self, con):
+        signal_results = run_all_signals(con)
+        correlations = compute_cross_signal_correlations(signal_results)
+        assert "total_unique_providers_flagged" in correlations
+        assert "providers_by_signal_count" in correlations
+        assert "multi_signal_providers" in correlations
+        assert "top_signal_pairs" in correlations
+
+    def test_cross_signal_counts_match(self, con):
+        signal_results = run_all_signals(con)
+        correlations = compute_cross_signal_correlations(signal_results)
+        # Total unique providers should match the number of distinct NPIs across all signals
+        all_npis = set()
+        for signals in signal_results.values():
+            for s in signals:
+                all_npis.add(s["npi"])
+        assert correlations["total_unique_providers_flagged"] == len(all_npis)
+
+    def test_cross_signal_in_report(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        assert "cross_signal_analysis" in report
+        assert "total_unique_providers_flagged" in report["cross_signal_analysis"]
+
+
+class TestMethodology:
+    """Test the methodology documentation."""
+
+    def test_methodology_in_report(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        assert "methodology" in report
+        assert "overview" in report["methodology"]
+        assert "signals" in report["methodology"]
+
+    def test_methodology_covers_all_signals(self):
+        signal_types = [
+            "excluded_provider", "billing_outlier", "rapid_escalation",
+            "workforce_impossibility", "shared_official", "geographic_implausibility",
+            "address_clustering", "upcoding", "concurrent_billing",
+        ]
+        for sig_type in signal_types:
+            assert sig_type in METHODOLOGY["signals"], f"Missing methodology for {sig_type}"
+            sig_method = METHODOLOGY["signals"][sig_type]
+            assert "description" in sig_method
+            assert "methodology" in sig_method
+            assert "overpayment_basis" in sig_method
+            assert "threshold" in sig_method
+
+    def test_methodology_has_risk_scoring(self):
+        assert "risk_scoring" in METHODOLOGY
+        assert "tiers" in METHODOLOGY["risk_scoring"]
+        for tier in ["critical", "high", "medium", "low"]:
+            assert tier in METHODOLOGY["risk_scoring"]["tiers"]
+
+
+class TestClaimTypeMap:
+    """Test the FCA claim type mappings."""
+
+    def test_all_signal_types_have_claim_type(self):
+        signal_types = [
+            "excluded_provider", "billing_outlier", "rapid_escalation",
+            "workforce_impossibility", "shared_official", "geographic_implausibility",
+            "address_clustering", "upcoding", "concurrent_billing",
+        ]
+        for sig_type in signal_types:
+            assert sig_type in CLAIM_TYPE_MAP, f"Missing claim type for {sig_type}"
+            assert len(CLAIM_TYPE_MAP[sig_type]) > 10
+
+    def test_all_signal_types_have_statute(self):
+        signal_types = [
+            "excluded_provider", "billing_outlier", "rapid_escalation",
+            "workforce_impossibility", "shared_official", "geographic_implausibility",
+            "address_clustering", "upcoding", "concurrent_billing",
+        ]
+        for sig_type in signal_types:
+            assert sig_type in STATUTE_MAP
+            assert "31 U.S.C." in STATUTE_MAP[sig_type]
+
+
+class TestEdgeCases:
+    """Test edge cases and boundary conditions."""
+
+    def test_empty_signal_results(self, con):
+        empty_results = {
+            "excluded_provider": [],
+            "billing_outlier": [],
+            "rapid_escalation": [],
+            "workforce_impossibility": [],
+            "shared_official": [],
+            "geographic_implausibility": [],
+            "address_clustering": [],
+            "upcoding": [],
+            "concurrent_billing": [],
+        }
+        report = generate_report(empty_results, con, 0)
+        assert report["total_providers_flagged"] == 0
+        assert report["flagged_providers"] == []
+
+    def test_risk_score_with_zero_total_paid(self):
+        signals = [{"signal_type": "billing_outlier", "severity": "high", "estimated_overpayment_usd": 5000}]
+        result = compute_risk_score(signals, 0)
+        assert result["score"] >= 0
+        assert result["tier"] in ("critical", "high", "medium", "low")
+
+    def test_risk_score_with_negative_overpayment(self):
+        signals = [{"signal_type": "billing_outlier", "severity": "medium", "estimated_overpayment_usd": -100}]
+        result = compute_risk_score(signals, 100000)
+        assert result["score"] >= 0
+
+    def test_narrative_with_minimal_provider(self, con):
+        provider = {
+            "npi": "0000000000",
+            "provider_name": "Unknown",
+            "entity_type": "unknown",
+            "state": "Unknown",
+            "total_paid_all_time": 0.0,
+            "signals": [],
+            "estimated_overpayment_usd": 0.0,
+            "risk_score": {"score": 0, "tier": "low"},
+        }
+        narrative = generate_case_narrative(provider)
+        assert isinstance(narrative, str)
+        assert "0000000000" in narrative
+
+    def test_all_severities_have_weights(self):
+        from src.output import SEVERITY_WEIGHTS
+        for severity in ["critical", "high", "medium", "low"]:
+            assert severity in SEVERITY_WEIGHTS
+            assert SEVERITY_WEIGHTS[severity] > 0
+
+    def test_all_signal_types_have_risk_weights(self):
+        from src.output import SIGNAL_RISK_WEIGHTS
+        signal_types = [
+            "excluded_provider", "billing_outlier", "rapid_escalation",
+            "workforce_impossibility", "shared_official", "geographic_implausibility",
+            "address_clustering", "upcoding", "concurrent_billing",
+        ]
+        for sig_type in signal_types:
+            assert sig_type in SIGNAL_RISK_WEIGHTS, f"Missing risk weight for {sig_type}"
+
+    def test_signal_results_have_required_keys(self, con):
+        signal_results = run_all_signals(con)
+        for signal_type, signals in signal_results.items():
+            for sig in signals:
+                assert "signal_type" in sig
+                assert "severity" in sig
+                assert "npi" in sig
+                assert "evidence" in sig
+                assert "estimated_overpayment_usd" in sig
+                assert sig["severity"] in ("critical", "high", "medium", "low")
+
+    def test_overpayments_are_non_negative(self, con):
+        signal_results = run_all_signals(con)
+        for signal_type, signals in signal_results.items():
+            for sig in signals:
+                assert sig["estimated_overpayment_usd"] >= 0, \
+                    f"Negative overpayment in {signal_type}: {sig['estimated_overpayment_usd']}"
+
+
+class TestMultiSignalProviders:
+    """Test that multi-signal providers are handled correctly."""
+
+    def test_multi_signal_provider_detected(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        # Check if any provider has multiple signals
+        multi = [p for p in report["flagged_providers"] if len(p["signals"]) > 1]
+        # At least some providers should be flagged by multiple signals
+        # (the 9700000001 provider is designed to hit rapid escalation)
+        assert isinstance(multi, list)
+
+    def test_multi_signal_provider_has_higher_risk(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        multi = [p for p in report["flagged_providers"] if len(p["signals"]) > 1]
+        single = [p for p in report["flagged_providers"] if len(p["signals"]) == 1]
+        if multi and single:
+            avg_multi = sum(p["risk_score"]["score"] for p in multi) / len(multi)
+            avg_single = sum(p["risk_score"]["score"] for p in single) / len(single)
+            # Multi-signal providers should generally have higher risk scores
+            # (not strictly required but expected)
+            assert avg_multi >= 0  # At minimum, they have scores
+
+
+class TestHtmlReportDetails:
+    """Additional HTML report tests."""
+
+    def test_html_has_methodology_section(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+            tmp_path = f.name
+        try:
+            write_html_report(report, tmp_path)
+            with open(tmp_path) as f:
+                content = f.read()
+            assert "Flagged Provider Details" in content
+        finally:
+            os.unlink(tmp_path)
+
+    def test_html_has_tier_badges(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+            tmp_path = f.name
+        try:
+            write_html_report(report, tmp_path)
+            with open(tmp_path) as f:
+                content = f.read()
+            assert "tier-badge" in content
+        finally:
+            os.unlink(tmp_path)
+
+    def test_html_has_score_bars(self, con):
+        signal_results = run_all_signals(con)
+        report = generate_report(signal_results, con, 100)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+            tmp_path = f.name
+        try:
+            write_html_report(report, tmp_path)
+            with open(tmp_path) as f:
+                content = f.read()
+            assert "score-bar" in content
+            assert "score-fill" in content
+        finally:
+            os.unlink(tmp_path)

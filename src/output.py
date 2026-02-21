@@ -4,7 +4,7 @@ import json
 import html as html_lib
 from datetime import datetime, timezone
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 
 # Statute reference mapping per spec
 STATUTE_MAP = {
@@ -394,8 +394,84 @@ def generate_executive_summary(report: dict) -> dict:
     }
 
 
+METHODOLOGY = {
+    "overview": (
+        "This tool cross-references three federal datasets — CMS Medicaid Provider Spending (227M rows), "
+        "OIG LEIE Exclusion List, and CMS NPPES NPI Registry — to detect 9 categories of fraud signals. "
+        "All processing uses DuckDB for memory-efficient out-of-core analytics on machines with limited RAM."
+    ),
+    "signals": {
+        "excluded_provider": {
+            "description": "Identifies providers on the OIG LEIE exclusion list who continue billing Medicaid",
+            "methodology": "Join billing NPI and servicing NPI against LEIE exclusion records where exclusion date precedes claim date and no reinstatement",
+            "overpayment_basis": "100% of post-exclusion payments — all payments to excluded providers are improper per 42 CFR 1001.1901",
+            "threshold": "Any match = flag (zero tolerance for excluded provider billing)",
+        },
+        "billing_outlier": {
+            "description": "Identifies providers billing far above their peer group (same taxonomy + state)",
+            "methodology": "Compute per-provider total paid, group by taxonomy_code + state, flag providers above the 99th percentile",
+            "overpayment_basis": "Amount exceeding the 99th percentile of the peer group",
+            "threshold": "Total paid > peer group 99th percentile, with minimum 5 peers in group",
+        },
+        "rapid_escalation": {
+            "description": "Detects newly enrolled entities with suspicious billing growth patterns",
+            "methodology": "Filter to providers enumerated within 24 months of first billing, compute rolling 3-month average growth rate",
+            "overpayment_basis": "Sum of payments during months with >200% growth rate",
+            "threshold": "Rolling 3-month average growth rate > 200%",
+        },
+        "workforce_impossibility": {
+            "description": "Flags organizations billing physically impossible claim volumes",
+            "methodology": "For entity type 2 (organizations), compute peak monthly claims / 22 workdays / 8 hours",
+            "overpayment_basis": "Excess claims beyond 6/hour threshold x average cost per claim",
+            "threshold": "Implied claims per hour > 6.0 (max 1,056 claims/month per practitioner)",
+        },
+        "shared_official": {
+            "description": "Identifies networks where one authorized official controls 5+ NPIs",
+            "methodology": "Group NPPES records by authorized official name, join with billing totals",
+            "overpayment_basis": "10-20% of combined network billing (DOJ settlement data for shell networks)",
+            "threshold": "5+ distinct NPIs under same official, combined billing > $1M",
+        },
+        "geographic_implausibility": {
+            "description": "Detects home health providers with implausible beneficiary-to-claims ratios",
+            "methodology": "Filter to home health HCPCS codes, compute beneficiary/claims ratio per provider-month",
+            "overpayment_basis": "Proportion of claims exceeding 1:10 beneficiary-to-claims ratio",
+            "threshold": "Beneficiary/claims ratio < 0.1 with >100 claims in a single month",
+        },
+        "address_clustering": {
+            "description": "Identifies zip codes with unusually high concentrations of billing providers",
+            "methodology": "Group providers by zip code, sum billing, flag high-density clusters",
+            "overpayment_basis": "15% of combined billing (OIG ghost office investigation data)",
+            "threshold": "10+ NPIs at same zip code with >$5M combined billing",
+        },
+        "upcoding": {
+            "description": "Detects providers systematically billing highest-complexity E&M codes",
+            "methodology": "Compute high-level E&M code percentage per provider, compare to taxonomy+state peer average",
+            "overpayment_basis": "Conservative 30% uplift on excess high-level billing vs peer average",
+            "threshold": "Provider >80% high-complexity E&M codes when peer average <30%, minimum 50 E&M claims",
+        },
+        "concurrent_billing": {
+            "description": "Flags individual providers billing in 5+ states in a single month",
+            "methodology": "Join billing NPI with servicing NPI state, count distinct states per month per individual",
+            "overpayment_basis": "60% of payments in flagged months (legitimate multi-state practice is rare for individuals)",
+            "threshold": "5+ distinct states in any single month, individuals only (orgs excluded)",
+        },
+    },
+    "risk_scoring": {
+        "description": "Each provider receives a composite risk score (0-100) combining signal breadth, severity weight, and overpayment ratio",
+        "tiers": {
+            "critical": "75-100 — immediate investigation priority",
+            "high": "50-74 — investigation recommended within 30 days",
+            "medium": "25-49 — review recommended within 90 days",
+            "low": "0-24 — monitor and reassess in next cycle",
+        },
+    },
+}
+
+
 def generate_report(signal_results: dict, con, total_providers_scanned: int) -> dict:
     """Generate the final fraud_signals.json report."""
+    from src.signals import compute_cross_signal_correlations
+
     # Group signals by NPI
     npi_signals: dict[str, list[dict]] = {}
     signal_counts = {}
@@ -423,9 +499,11 @@ def generate_report(signal_results: dict, con, total_providers_scanned: int) -> 
     report = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool_version": VERSION,
+        "methodology": METHODOLOGY,
         "total_providers_scanned": total_providers_scanned,
         "total_providers_flagged": len(flagged_providers),
         "signal_counts": signal_counts,
+        "cross_signal_analysis": compute_cross_signal_correlations(signal_results),
         "flagged_providers": flagged_providers,
     }
 
