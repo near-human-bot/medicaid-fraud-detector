@@ -1,6 +1,8 @@
 # Medicaid Fraud Signal Detection Engine v3.0.0
 
-Detects 9 types of fraud signals in Medicaid provider spending data by cross-referencing the HHS spending dataset (227M rows), OIG LEIE exclusion list, and CMS NPPES NPI registry.
+**Based on [TheAuroraAI/medicaid-fraud-detector](https://github.com/TheAuroraAI/medicaid-fraud-detector).** The core architecture, signal design, and competition submission are their work — they deserve the majority of the competition credit. This fork extends their engine with additional signals and refinements.
+
+Detects 19 types of fraud signals in Medicaid provider spending data by cross-referencing the HHS spending dataset (227M rows), OIG LEIE exclusion list, and CMS NPPES NPI registry.
 
 Built with DuckDB for memory-efficient out-of-core analytics — runs on machines with as little as 2GB available RAM.
 
