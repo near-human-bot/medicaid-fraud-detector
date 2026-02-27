@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.ingest import load_all
 from src.signals import run_all_signals
-from src.output import generate_report, write_report, write_html_report
+from src.output import generate_report, write_report, write_html_report, write_fof_report, write_fof_html_report
 
 
 def main():
@@ -31,6 +31,16 @@ def main():
         "--html",
         default=None,
         help="Output HTML report path (optional)",
+    )
+    parser.add_argument(
+        "--fof-json",
+        default=None,
+        help="Output path for Feeding Our Future network fraud JSON report (optional)",
+    )
+    parser.add_argument(
+        "--fof-html",
+        default=None,
+        help="Output path for Feeding Our Future network fraud HTML report (optional)",
     )
     parser.add_argument(
         "--memory-limit",
@@ -73,6 +83,12 @@ def main():
     # Write HTML output if requested
     if args.html:
         write_html_report(report, args.html)
+
+    # Write FOF network fraud reports if requested
+    if args.fof_json:
+        write_fof_report(report, args.fof_json)
+    if args.fof_html:
+        write_fof_html_report(report, args.fof_html)
 
     elapsed = time.time() - start_time
     minutes = int(elapsed // 60)
